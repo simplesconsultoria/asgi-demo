@@ -1,0 +1,9 @@
+<configure xmlns="http://namespaces.zope.org/zope">
+
+  <subscriber
+      for=".breaking_news_update.IBreakingNewsUpdate
+           zope.lifecycleevent.interfaces.IObjectAddedEvent"
+      handler=".breaking_news_update.store_datetime"
+      />
+
+</configure>

@@ -1,0 +1,13 @@
+<configure xmlns="http://namespaces.zope.org/zope">
+
+  <permission
+      id="asgidemo.AddBreakingNews"
+      title="asgidemo: Add Breaking News"
+      />
+
+  <permission
+      id="asgidemo.AddBreakingNewsUpdate"
+      title="asgidemo: Add Breaking News Update"
+      />
+
+</configure>

@@ -1,0 +1,20 @@
+# Configuration for https://github.com/plone/cookiecutter-zope-instance
+
+default_context:
+    initial_user_password: 'admin'
+    zcml_package_includes: 'asgidemo'
+    # Local development runs against the services in docker-compose.services.yml:
+    # PostgreSQL on localhost:5432 and silo (S3) on localhost:9000.
+    db_storage: 'pgjsonb'
+    db_pgjsonb_dsn: 'dbname=plone user=plone password=plone host=localhost port=5432'
+    db_pgjsonb_pool_size: '4'
+    db_pool_size: '4'
+    # Every blob goes to S3, not only those above the default 100KB.
+    db_pgjsonb_blob_threshold: '0'
+    db_pgjsonb_s3_bucket_name: 'plone-blobs'
+    db_pgjsonb_s3_endpoint_url: 'http://localhost:9000'
+    db_pgjsonb_s3_access_key: 'silo'
+    db_pgjsonb_s3_secret_key: 'silo-secret'
+    db_pgjsonb_s3_use_ssl: false
+    db_pgjsonb_s3_region: 'us-east-1'
+    db_pgjsonb_blob_cache_dir: 'instance/var/blobcache'

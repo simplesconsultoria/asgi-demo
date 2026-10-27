@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<object xmlns:i18n="http://xml.zope.org/namespaces/i18n"
+        meta_type="Dexterity FTI"
+        name="BreakingNewsUpdate"
+        i18n:domain="asgidemo"
+>
+
+  <!-- Basic properties -->
+  <property name="title"
+            i18n:translate=""
+  >Breaking News Update</property>
+  <property name="description"
+            i18n:translate=""
+  >One update posted to a Breaking News story.</property>
+
+  <property name="allow_discussion">False</property>
+  <property name="factory">BreakingNewsUpdate</property>
+  <property name="icon_expr">string:contenttype/document</property>
+  <property name="link_target" />
+
+  <!-- Hierarchy control: only addable inside a BreakingNews -->
+  <property name="allowed_content_types" />
+  <property name="filter_content_types">True</property>
+  <property name="global_allow">False</property>
+
+  <!-- Schema, class and security -->
+  <property name="add_permission">asgidemo.AddBreakingNewsUpdate</property>
+  <property name="klass">asgidemo.content.breaking_news_update.BreakingNewsUpdate</property>
+  <property name="model_file" />
+  <property name="model_source" />
+  <property name="schema">asgidemo.content.breaking_news_update.IBreakingNewsUpdate</property>
+
+  <!-- Enabled behaviors -->
+  <property name="behaviors"
+            purge="false"
+  >
+    <element value="plone.basic" />
+    <element value="plone.ownership" />
+    <element value="plone.shortname" />
+  </property>
+
+  <!-- View information -->
+  <property name="add_view_expr">string:${folder_url}/++add++BreakingNewsUpdate</property>
+  <property name="default_view">view</property>
+  <property name="default_view_fallback">False</property>
+  <property name="immediate_view">view</property>
+  <property name="view_methods">
+    <element value="view" />
+  </property>
+
+  <!-- Method aliases -->
+  <alias from="(Default)"
+         to="(dynamic view)"
+  />
+  <alias from="edit"
+         to="@@edit"
+  />
+  <alias from="view"
+         to="(selected layout)"
+  />
+
+  <!-- Actions -->
+  <action action_id="view"
+          category="object"
+          condition_expr=""
+          icon_expr="string:toolbar-action/view"
+          title="View"
+          url_expr="string:${object_url}"
+          visible="True"
+          i18n:attributes="title"
+  >
+    <permission value="View" />
+  </action>
+  <action action_id="edit"
+          category="object"
+          condition_expr=""
+          icon_expr="string:toolbar-action/edit"
+          title="Edit"
+          url_expr="string:${object_url}/edit"
+          visible="True"
+          i18n:attributes="title"
+  >
+    <permission value="Modify portal content" />
+  </action>
+
+</object>

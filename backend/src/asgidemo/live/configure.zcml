@@ -1,0 +1,40 @@
+<configure
+    xmlns="http://namespaces.zope.org/zope"
+    xmlns:ploneasgi="http://namespaces.plone.org/ploneasgi"
+    >
+
+  <include
+      package="ploneasgi"
+      file="meta.zcml"
+      />
+
+  <!-- Install the outbox on PGJsonb when the database opens -->
+  <subscriber
+      for="zope.processlifetime.IDatabaseOpenedWithRoot"
+      handler=".outbox.register_processor"
+      />
+
+  <!-- An update lands in a story: fire our own event -->
+  <subscriber
+      for="asgidemo.content.breaking_news_update.IBreakingNewsUpdate
+           zope.lifecycleevent.interfaces.IObjectAddedEvent"
+      handler=".subscribers.update_added"
+      />
+
+  <!-- Our event: queue the message for the outbox -->
+  <subscriber
+      for="asgidemo.content.breaking_news_update.IBreakingNewsUpdate
+           .events.IBreakingNewsUpdateAdded"
+      handler=".subscribers.announce"
+      />
+
+  <!-- The reader's socket. zope2.View is checked on the portal; the handler
+       checks the story itself. -->
+  <ploneasgi:route
+      permission="zope2.View"
+      handler=".websocket.breaking_news"
+      path="/breaking-news/{uid}"
+      type="websocket"
+      />
+
+</configure>

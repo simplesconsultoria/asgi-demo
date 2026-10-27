@@ -1,0 +1,23 @@
+{
+    "title": "ASGI Demo",
+    "description": "A demo of ASGI with Plone and Volto",
+    "project_slug": "asgi-demo",
+    "hostname": "asgi-demo.tangrama.com.br",
+    "author": "\u00c9rico Andrei",
+    "email": "ericof@plone.org",
+    "python_package_name": "asgidemo",
+    "use_prerelease_versions": false,
+    "plone_version": "6.2.2",
+    "feature_headless": true,
+    "volto_version": "19.5.1",
+    "frontend_addon_name": "volto-asgidemo",
+    "language_code": "en",
+    "github_organization": "simplesconsultoria",
+    "container_registry": "github",
+    "devops_storage": "relstorage",
+    "devops_cache": false,
+    "devops_ansible": false,
+    "devops_gha_deploy": false,
+    "initialize_documentation": false,
+    "__template__": "project"
+}

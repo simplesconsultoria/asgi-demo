@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<object meta_type="Plone Workflow Tool"
+        name="portal_workflow"
+>
+  <bindings>
+    <!-- No workflow: an update acquires View from its story, so "added"
+         means "visible to whoever can see the story", and the full update
+         can be broadcast to every reader of that story. -->
+    <type type_id="BreakingNewsUpdate" />
+  </bindings>
+</object>

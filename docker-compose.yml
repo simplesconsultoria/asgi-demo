@@ -1,0 +1,197 @@
+---
+# Live Breaking News on Plone, served by ploneasgi.
+#
+#   Traefik ── Volto (frontend)
+#           └─ Plone backends ×2 (ploneasgi) ── PostgreSQL 18 (ZODB on PGJsonb,
+#                                            │   catalog on plone.pgcatalog,
+#                                            │   LISTEN/NOTIFY fan-out)
+#                                            └─ silo (S3 blobs)
+#
+# Open http://asgi-demo.localhost/brazil-2026
+name: asgi-demo
+
+x-backend-environment: &backend-environment
+  ZODB_PGJSONB_DSN: "dbname=${DB_NAME:-plone} user=${DB_USER:-plone} password=${DB_PASSWORD:-liBWjRgTjnLu} host=${DB_HOST:-db} port=${DB_PORT:-5432}"
+  ZODB_PGJSONB_S3BLOBS_ENABLED: "true"
+  ZODB_PGJSONB_S3BLOBS_ENDPOINT_URL: "http://silo:9000"
+  ZODB_PGJSONB_S3BLOBS_BUCKET_NAME: "${S3_BUCKET:-plone-blobs}"
+  ZODB_PGJSONB_S3BLOBS_ACCESS_KEY: "${S3_ACCESS_KEY:-silo}"
+  ZODB_PGJSONB_S3BLOBS_SECRET_KEY: "${S3_SECRET_KEY:-silo-secret-key}"
+  ZODB_PGJSONB_S3BLOBS_REGION: "us-east-1"
+  ZODB_PGJSONB_S3BLOBS_USE_SSL: "false"
+  # Every blob goes to S3, not only those above the default 100KB.
+  ZODB_PGJSONB_S3BLOBS_THRESHOLD: "0"
+  # Below the ZODB's default pool-size of 7, as ploneasgi requires.
+  PLONE_CONCURRENCY: "4"
+  PLONE_ACCESS_LOG: "1"
+
+services:
+  traefik:
+    image: traefik:v3.7
+
+    ports:
+      - 80:80
+
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      - traefik.http.routers.traefik-public-http.rule=Host(`traefik.asgi-demo.localhost`)
+      - traefik.http.routers.traefik-public-http.entrypoints=http
+      - traefik.http.routers.traefik-public-http.service=api@internal
+      - traefik.http.services.traefik-public.loadbalancer.server.port=8000
+
+      # GENERIC MIDDLEWARES
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.gzip.compress.excludedcontenttypes=image/png, image/jpeg, font/woff2
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    command:
+      - --providers.docker
+      - --providers.docker.constraints=Label(`traefik.constraint-label`, `public`)
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.http.address=:80
+      - --accesslog
+      - --log
+      - --api
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VOLTO_VERSION=${VOLTO_VERSION}
+    environment:
+      RAZZLE_INTERNAL_API_PATH: http://backend:8080/Plone
+    depends_on:
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      # Service
+      - traefik.http.services.svc-frontend.loadbalancer.server.port=3000
+      # Routers
+      ## /
+      - traefik.http.routers.rt-frontend.rule=Host(`asgi-demo.localhost`)
+      - traefik.http.routers.rt-frontend.entrypoints=http
+      - traefik.http.routers.rt-frontend.service=svc-frontend
+      - traefik.http.routers.rt-frontend.middlewares=gzip
+
+  # One-shot: create the site with its example content, then switch its
+  # catalog to plone.pgcatalog. Does nothing on a site that already exists.
+  backend-init:
+    build:
+      context: ./backend
+      args:
+        - PLONE_VERSION=${PLONE_VERSION}
+    image: asgi-demo-backend:latest
+    environment:
+      <<: *backend-environment
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        /app/docker-entrypoint.sh create-site &&
+        /app/docker-entrypoint.sh run /app/scripts/enable_pgcatalog.py
+    depends_on:
+      db:
+        condition: service_healthy
+      silo-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    image: asgi-demo-backend:latest
+    environment:
+      <<: *backend-environment
+    depends_on:
+      backend-init:
+        condition: service_completed_successfully
+    # Two backends: an update saved on one reaches readers on both, through
+    # PostgreSQL LISTEN/NOTIFY. Each container reports its own readers.
+    deploy:
+      replicas: 2
+    stop_grace_period: 20s
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      # Services
+      - traefik.http.services.svc-backend.loadbalancer.server.port=8080
+
+      # Middlewares
+      ## VHM rewrite /++api++/ (also serves the stories' websockets,
+      ## /++api++/++asgi++/breaking-news/<uid>)
+      - "traefik.http.middlewares.mw-backend-vhm-api.replacepathregex.regex=^/\\+\\+api\\+\\+($$|/.*)"
+      - "traefik.http.middlewares.mw-backend-vhm-api.replacepathregex.replacement=/VirtualHostBase/http/asgi-demo.localhost/Plone/++api++/VirtualHostRoot$$1"
+
+      ## VHM rewrite /ClassicUI/
+      - "traefik.http.middlewares.mw-backend-vhm-classic.replacepathregex.regex=^/ClassicUI($$|/.*)"
+      - "traefik.http.middlewares.mw-backend-vhm-classic.replacepathregex.replacement=/VirtualHostBase/http/asgi-demo.localhost/Plone/VirtualHostRoot/_vh_ClassicUI$$1"
+
+      ## Basic Authentication
+      ### Note: all dollar signs in the hash need to be doubled for escaping.
+      ### To create user:password pair, it's possible to use this command:
+      ### echo $(htpasswd -nb user password) | sed -e s/\\$/\\$\\$/g
+      ### Defaults to admin:admin
+      - traefik.http.middlewares.mw-backend-auth.basicauth.headerField=X-Auth-ClassicUI
+      - traefik.http.middlewares.mw-backend-auth.basicauth.users=admin:$$apr1$$uZPT5Fgu$$AmlIdamxT5ipBvPlsdfD70
+      # Routers
+      - traefik.http.routers.rt-backend-api.rule=Host(`asgi-demo.localhost`) && (PathPrefix(`/++api++`))
+      - traefik.http.routers.rt-backend-api.entrypoints=http
+      - traefik.http.routers.rt-backend-api.service=svc-backend
+      - traefik.http.routers.rt-backend-api.middlewares=gzip,mw-backend-vhm-api
+
+      ## /ClassicUI
+      - traefik.http.routers.rt-backend-classic.rule=Host(`asgi-demo.localhost`) && PathPrefix(`/ClassicUI`)
+      - traefik.http.routers.rt-backend-classic.entrypoints=http
+      - traefik.http.routers.rt-backend-classic.service=svc-backend
+      - traefik.http.routers.rt-backend-classic.middlewares=gzip,mw-backend-auth,mw-backend-vhm-classic
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${DB_USER:-plone}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-liBWjRgTjnLu}
+      POSTGRES_DB: ${DB_NAME:-plone}
+    # Per backend: the ZODB pool, plone.pgcatalog's pool, and two for the
+    # Breaking News hub (LISTEN, and reads plus presence).
+    command: ["postgres", "-c", "max_connections=200"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - vol-site-data:/var/lib/postgresql
+
+  silo:
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-silo}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-silo-secret-key}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - vol-blobs:/data
+
+  silo-init:
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    depends_on:
+      silo:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-silo}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-silo-secret-key}
+      S3_BUCKET: ${S3_BUCKET:-plone-blobs}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://silo:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" &&
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+    restart: "no"
+
+volumes:
+  vol-site-data: {}
+  vol-blobs: {}

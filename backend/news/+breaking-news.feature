@@ -1,0 +1,1 @@
+Added the Breaking News and Breaking News Update content types, with live updates over websockets fanned out through PostgreSQL LISTEN/NOTIFY, a `@breaking-news` REST API service, and the example story "Brazil Elections 2026". The site now stores its data in PostgreSQL with blobs in S3, and uses plone.pgcatalog. @ericof

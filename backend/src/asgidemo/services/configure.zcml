@@ -1,0 +1,19 @@
+<configure
+    xmlns="http://namespaces.zope.org/zope"
+    xmlns:plone="http://namespaces.plone.org/plone"
+    >
+
+  <adapter
+      factory=".breaking_news.BreakingNewsUpdates"
+      name="breaking-news"
+      />
+
+  <plone:service
+      method="GET"
+      factory=".breaking_news.BreakingNewsGet"
+      for="asgidemo.content.breaking_news.IBreakingNews"
+      permission="zope2.View"
+      name="@breaking-news"
+      />
+
+</configure>

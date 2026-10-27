@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<object name="portal_catalog">
+  <index meta_type="DateIndex"
+         name="breaking_news_datetime"
+  >
+    <property name="index_naive_time_as_local">True</property>
+  </index>
+  <column value="breaking_news_datetime" />
+</object>

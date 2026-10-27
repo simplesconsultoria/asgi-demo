@@ -1,0 +1,9 @@
+<configure xmlns="http://namespaces.zope.org/zope">
+
+  <!-- Indexers/Metadata -->
+  <adapter
+      factory=".breaking_news_update.breaking_news_datetime"
+      name="breaking_news_datetime"
+      />
+
+</configure>

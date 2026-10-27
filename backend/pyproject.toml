@@ -1,0 +1,198 @@
+[project]
+name = "asgidemo"
+dynamic = ["version"]
+description = "A demo of ASGI with Plone and Volto"
+readme = "README.md"
+license = "GPL-2.0-only"
+requires-python = ">=3.14"
+authors = [
+    { name = "Érico Andrei", email = "ericof@plone.org" },
+]
+keywords = [
+    "CMS",
+    "Plone",
+    "Python",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Plone",
+    "Framework :: Plone :: 6.2",
+    "Framework :: Plone :: Addon",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "Products.CMFPlone==6.2.2",
+    "plone.api",
+    "plone.restapi",
+    "plone.volto",
+    "plone.pgcatalog==1.0.0rc9",
+    "ploneasgi[plone] @ git+https://github.com/simplesconsultoria/ploneasgi@41d860e313f46bf83c03bf3e97de26879ced8b31",
+    "psycopg[binary,pool]>=3.1",
+    "zodb-pgjsonb[s3]>=1.19.0",
+]
+
+[dependency-groups]
+test = [
+    "horse-with-no-namespace",
+    "httpx",
+    "plone.app.testing",
+    "plone.restapi[test]",
+    "pytest",
+    "pytest-cov",
+    "pytest-plone>=1.0.0a3",
+    "pytest-timeout",
+]
+
+container = [
+    "plone.app.upgrade",
+]
+
+[project.urls]
+Homepage = "https://github.com/simplesconsultoria/asgi-demo"
+PyPI = "https://pypi.org/project/asgidemo"
+Source = "https://github.com/simplesconsultoria/asgi-demo"
+Tracker = "https://github.com/simplesconsultoria/asgi-demo/issues"
+
+
+[project.entry-points."plone.autoinclude.plugin"]
+target = "plone"
+
+[tool.uv]
+managed = true
+default-groups = ["test"]
+
+[tool.hatch.version]
+path = "src/asgidemo/__init__.py"
+
+[tool.hatch.metadata]
+# ploneasgi is not on PyPI; it is pinned to a commit on GitHub.
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+strict-naming = true
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asgidemo"]
+
+[tool.towncrier]
+directory = "news/"
+filename = "CHANGELOG.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## {version} ({project_date})"
+template = "news/.changelog_template.jinja"
+issue_format = "[#{issue}](https://github.com/simplesconsultoria/asgi-demo/issues/{issue})"
+underlines = ["", "", ""]
+
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "feature"
+name = "Feature"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "bugfix"
+name = "Bugfix"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "internal"
+name = "Internal"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "documentation"
+name = "Documentation"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "tests"
+name = "Tests"
+showcontent = true
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+fix = true
+lint.select = [
+    # flake8-2020
+    "YTT",
+    # flake8-bandit
+    "S",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-comprehensions
+    "C4",
+    # flake8-debugger
+    "T10",
+    # flake8-simplify
+    "SIM",
+    # mccabe
+    "C90",
+    # pycodestyle
+    "E", "W",
+    # pyflakes
+    "F",
+    # pygrep-hooks
+    "PGH",
+    # pyupgrade
+    "UP",
+    # ruff
+    "RUF",
+]
+lint.ignore = [
+    # DoNotAssignLambda
+    "E731",
+]
+
+[tool.ruff.lint.isort]
+case-sensitive = false
+no-sections = true
+force-single-line = true
+from-first = true
+lines-after-imports = 2
+lines-between-types = 1
+order-by-type = false
+
+[tool.ruff.format]
+preview = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501", "RUF001", "S101"]
+
+[tool.check-manifest]
+ignore = [
+    ".editorconfig",
+    ".flake8",
+    "dependabot.yml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A websocket test that waits for a message that never comes hangs forever.
+timeout = 120
+
+[tool.coverage.run]
+source_pkgs = ["asgidemo", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/asgidemo/locales/*.py",
+]
