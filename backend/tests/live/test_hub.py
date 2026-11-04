@@ -103,15 +103,39 @@ class TestHub:
         assert run(scenario()) == ({}, 0)
 
     def test_counts(self):
-        """Counts are per story."""
+        """Counts are per story, and only of admitted readers."""
 
         async def scenario():
-            self.hub.join(STORY)
-            self.hub.join(STORY)
-            self.hub.join(OTHER)
+            for story in (STORY, STORY, OTHER):
+                self.hub.admit(self.hub.join(story))
+            self.hub.join(STORY)  # still being checked
+            self.hub.join("2" * 32)  # still being checked, alone on its story
             return self.hub.counts()
 
         assert run(scenario()) == {STORY: 2, OTHER: 1}
+
+    def test_admit_and_leave_signal_a_change(self):
+        """An admitted reader arriving or leaving is a change in presence."""
+
+        async def scenario():
+            subscriber = self.hub.join(STORY)
+            joined = self.hub.changed.is_set()
+            self.hub.admit(subscriber)
+            admitted = self.hub.changed.is_set()
+            self.hub.changed.clear()
+            self.hub.leave(subscriber)
+            return joined, admitted, self.hub.changed.is_set()
+
+        assert run(scenario()) == (False, True, True)
+
+    def test_refused_reader_is_no_change(self):
+        """A handshake refused before admission never touches presence."""
+
+        async def scenario():
+            self.hub.leave(self.hub.join(STORY))
+            return self.hub.changed.is_set()
+
+        assert run(scenario()) is False
 
     def test_close_all(self):
         """Every local reader is told to reconnect."""
@@ -170,12 +194,20 @@ class FakeConnection:
 
 
 class TestPostgresBroker:
-    def make(self, connection, hub=None):
+    def make(self, connection, hub=None, **kwargs):
         async def connect(dsn, autocommit):
             assert autocommit is True
             return connection
 
-        return PostgresBroker("dbname=test", hub or Hub("backend-1"), connect=connect)
+        return PostgresBroker(
+            "dbname=test", hub or Hub("backend-1"), connect=connect, **kwargs
+        )
+
+    def reader(self, broker, story=STORY):
+        """An admitted reader of ``story`` on the broker's hub."""
+        subscriber = broker.hub.join(story)
+        broker.hub.admit(subscriber)
+        return subscriber
 
     def test_notification_delivers_the_outbox_row(self):
         """A notification's id is read from the outbox and handed to readers."""
@@ -207,7 +239,7 @@ class TestPostgresBroker:
         broker = self.make(connection)
 
         async def scenario():
-            subscriber = broker.hub.join(STORY)
+            subscriber = self.reader(broker)
             await broker.report_presence()
             return json.loads(await subscriber.next())
 
@@ -221,6 +253,7 @@ class TestPostgresBroker:
         assert queries == [
             sql.REPORT_PRESENCE,
             sql.FORGET_PRESENCE,
+            sql.ANNOUNCE_PRESENCE,
             sql.TOTAL_PRESENCE,
         ]
         assert connection.executed[0][1] == {
@@ -228,6 +261,36 @@ class TestPostgresBroker:
             "story": STORY,
             "readers": 1,
         }
+        assert json.loads(connection.executed[2][1]["payload"]) == {
+            "backend": "backend-1",
+            "story": STORY,
+        }
+
+    def test_presence_announces_only_changes(self):
+        """An unchanged count is not announced; a story whose readers left is."""
+        connection = FakeConnection(totals=[(STORY, 1)])
+        broker = self.make(connection)
+
+        def announced():
+            stories = [
+                json.loads(params["payload"])["story"]
+                for query, params in connection.executed
+                if query == sql.ANNOUNCE_PRESENCE
+            ]
+            connection.executed.clear()
+            return stories
+
+        async def scenario():
+            subscriber = self.reader(broker)
+            await broker.report_presence()
+            first = announced()
+            await broker.report_presence()
+            unchanged = announced()
+            broker.hub.leave(subscriber)
+            await broker.report_presence()
+            return first, unchanged, announced()
+
+        assert run(scenario()) == ([STORY], [], [STORY])
 
     def test_presence_without_readers(self):
         """With no local readers, this backend only withdraws its reports."""
@@ -235,6 +298,61 @@ class TestPostgresBroker:
         broker = self.make(connection)
         run(broker.report_presence())
         assert [query for query, _ in connection.executed] == [sql.FORGET_PRESENCE]
+
+    def test_presence_follows_a_new_reader_at_once(self):
+        """A reader arriving is reported now, not on the next periodic round."""
+        connection = FakeConnection(totals=[(STORY, 2)])
+        broker = self.make(connection, presence_interval=60, presence_debounce=0)
+
+        async def scenario():
+            task = asyncio.create_task(broker.presence_forever())
+            try:
+                await asyncio.sleep(0)  # the first round: nobody reads yet
+                subscriber = self.reader(broker)
+                return json.loads(await subscriber.next())["readers"]
+            finally:
+                task.cancel()
+
+        assert run(scenario()) == 2
+
+    def test_presence_follows_another_backend_at_once(self):
+        """Another backend announcing a change refreshes this one's readers."""
+        connection = FakeConnection(totals=[(STORY, 1)])
+        broker = self.make(connection, presence_interval=60, presence_debounce=0)
+        other = json.dumps({"backend": "backend-2", "story": STORY})
+
+        async def scenario():
+            subscriber = self.reader(broker)
+            task = asyncio.create_task(broker.presence_forever())
+            try:
+                first = json.loads(await subscriber.next())["readers"]
+                connection.totals = [(STORY, 3)]
+                broker.handle_presence_notification(other)
+                return first, json.loads(await subscriber.next())["readers"]
+            finally:
+                task.cancel()
+
+        assert run(scenario()) == (1, 3)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            json.dumps({"backend": "backend-1", "story": STORY}),  # our own
+            json.dumps({"backend": "backend-2", "story": OTHER}),  # not read here
+            "not json",
+            json.dumps({"story": STORY}),
+        ],
+    )
+    def test_presence_notifications_that_change_nothing(self, payload):
+        """Only another backend's change, in a story read here, refreshes."""
+        broker = self.make(FakeConnection())
+
+        async def scenario():
+            self.reader(broker)
+            broker.handle_presence_notification(payload)
+            return broker._refresh.is_set()
+
+        assert run(scenario()) is False
 
     def test_resubscribe_closes_local_sockets(self, monkeypatch):
         """After a lost LISTEN connection, readers are told to reconnect."""
@@ -277,3 +395,39 @@ class TestPostgresBroker:
                 task.cancel()
 
         assert run(scenario()) == SERVICE_RESTART
+
+    def test_listen_dispatches_presence_announcements(self):
+        """A notification on the presence channel refreshes, never fetches."""
+
+        class Notification:
+            channel = sql.PRESENCE_CHANNEL
+            payload = json.dumps({"backend": "backend-2", "story": STORY})
+
+        class ListenConnection:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def execute(self, query, params=None):
+                assert query == sql.LISTEN
+
+            async def notifies(self):
+                yield Notification()
+                await asyncio.Event().wait()
+
+        async def connect(dsn, autocommit):
+            return ListenConnection()
+
+        broker = PostgresBroker("dbname=test", Hub("backend-1"), connect=connect)
+        self.reader(broker)
+
+        async def scenario():
+            task = asyncio.create_task(broker.listen_forever())
+            try:
+                await broker._refresh.wait()
+            finally:
+                task.cancel()
+
+        run(scenario())

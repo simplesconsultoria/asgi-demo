@@ -8,9 +8,10 @@ Connect order is load-bearing:
    story through the *restricted* catalog search, then send every update
    created since the page's cursor. An update committed between 1 and 2 is in
    the backlog, in the queue, or both; the client drops duplicates by UID.
-3. **Accept** only after the object-level check. The route's ``permission``
-   is checked on the portal, not on the story, so this check is the one that
-   keeps a private story private.
+3. **Admit and accept** only after the object-level check. The route's
+   ``permission`` is checked on the portal, not on the story, so this check
+   is the one that keeps a private story private. Admitting counts the socket
+   as a reader, so a refused handshake never shows in the reader count.
 """
 
 from AccessControl import Unauthorized
@@ -149,6 +150,8 @@ async def breaking_news(websocket: Any) -> None:
             await websocket.close(code=POLICY_VIOLATION)
             return
 
+        # Counted only now: a refused handshake never shows in the readers.
+        hub.admit(subscriber)
         await websocket.accept()
         for message in backlog:
             await websocket.send_text(json.dumps(message))

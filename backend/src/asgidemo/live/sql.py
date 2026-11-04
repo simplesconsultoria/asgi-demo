@@ -4,6 +4,8 @@ Zope-free on purpose: the hub imports it on the event loop.
 """
 
 CHANNEL = "breaking_news"
+# A backend's readers of a story changed; the others refresh their totals.
+PRESENCE_CHANNEL = "breaking_news_presence"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS breaking_news_outbox (
@@ -35,7 +37,9 @@ WITH row AS (
 SELECT pg_notify('{CHANNEL}', id::text) FROM row
 """  # noqa: S608 - CHANNEL is a constant
 
-LISTEN = f"LISTEN {CHANNEL}"
+LISTEN = f"LISTEN {CHANNEL}; LISTEN {PRESENCE_CHANNEL}"
+
+ANNOUNCE_PRESENCE = f"SELECT pg_notify('{PRESENCE_CHANNEL}', %(payload)s)"
 
 SELECT_MESSAGE = "SELECT payload FROM breaking_news_outbox WHERE id = %(id)s"
 

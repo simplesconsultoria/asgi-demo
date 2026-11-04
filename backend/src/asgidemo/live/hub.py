@@ -58,6 +58,7 @@ class Subscriber:
 
     def __init__(self, story: str, size: int = QUEUE_SIZE) -> None:
         self.story = story
+        self.admitted = False
         self.close_code: int | None = None
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(size)
 
@@ -109,9 +110,16 @@ class Hub:
     def __init__(self, instance: str) -> None:
         self.instance = instance
         self.local: dict[str, set[Subscriber]] = {}
+        #: Set when an admitted reader arrives or leaves, so presence is
+        #: reported now rather than on the next periodic round.
+        self.changed = asyncio.Event()
 
     def join(self, story: str) -> Subscriber:
         """Register a socket for a story's messages.
+
+        The socket receives messages from now on, but is not counted as a
+        reader until :meth:`admit`: a handshake that is refused never shows
+        up in the reader count.
 
         :param story: The story's UID.
         :returns: The socket's subscriber.
@@ -119,6 +127,16 @@ class Hub:
         subscriber = Subscriber(story)
         self.local.setdefault(story, set()).add(subscriber)
         return subscriber
+
+    def admit(self, subscriber: Subscriber) -> None:
+        """Count a socket as a reader, once it passed the permission check.
+
+        :param subscriber: What :meth:`join` returned.
+        """
+        if subscriber.admitted:
+            return
+        subscriber.admitted = True
+        self.changed.set()
 
     def leave(self, subscriber: Subscriber) -> None:
         """Forget a socket.
@@ -129,6 +147,8 @@ class Hub:
         peers.discard(subscriber)
         if not peers:
             self.local.pop(subscriber.story, None)
+        if subscriber.admitted:
+            self.changed.set()
 
     def deliver(self, story: str, data: str) -> int:
         """Hand a message to every local reader of a story.
@@ -152,8 +172,12 @@ class Hub:
                 subscriber.close(code)
 
     def counts(self) -> dict[str, int]:
-        """:returns: Local readers per story."""
-        return {story: len(peers) for story, peers in self.local.items()}
+        """:returns: Local admitted readers per story, for stories that have any."""
+        counts = {
+            story: sum(1 for subscriber in peers if subscriber.admitted)
+            for story, peers in self.local.items()
+        }
+        return {story: readers for story, readers in counts.items() if readers}
 
 
 def presence_message(story: str, readers: int) -> str:
@@ -190,7 +214,10 @@ class PostgresBroker:
 
     :param dsn: libpq connection string.
     :param hub: The hub to feed.
-    :param presence_interval: Seconds between presence reports.
+    :param presence_interval: Longest time between presence reports; readers
+        arriving or leaving trigger one sooner.
+    :param presence_debounce: Seconds to wait after a change before
+        reporting, so a burst of arrivals costs one report.
     :param presence_expiry: Seconds after which a backend's report no longer
         counts; a backend that died drops out of the total after this.
     :param outbox_keep: Seconds an outbox row is kept.
@@ -203,6 +230,7 @@ class PostgresBroker:
         hub: Hub,
         *,
         presence_interval: float = 5.0,
+        presence_debounce: float = 0.2,
         presence_expiry: float = 15.0,
         outbox_keep: float = 24 * 3600.0,
         connect: Connect | None = None,
@@ -210,11 +238,16 @@ class PostgresBroker:
         self.dsn = dsn
         self.hub = hub
         self.presence_interval = presence_interval
+        self.presence_debounce = presence_debounce
         self.presence_expiry = presence_expiry
         self.outbox_keep = outbox_keep
         self._connect = connect or _default_connect()
         self._conn: Any = None
         self._conn_lock = asyncio.Lock()
+        # The counts of the last successful report, to announce only changes.
+        self._reported: dict[str, int] = {}
+        # Set when another backend announces a change in a story read here.
+        self._refresh = asyncio.Event()
 
     async def _query_connection(self) -> Any:
         """The connection for reads and presence, reopened when it broke."""
@@ -269,6 +302,21 @@ class PostgresBroker:
         delivered = self.hub.deliver(message["story"], json.dumps(message))
         logger.debug("message %s delivered to %d reader(s)", message_id, delivered)
 
+    def handle_presence_notification(self, payload: str) -> None:
+        """Refresh the totals when another backend's readers of a story changed.
+
+        :param payload: The announcement: the backend and the story, as JSON.
+        """
+        try:
+            announcement = json.loads(payload)
+            backend, story = announcement["backend"], announcement["story"]
+        except ValueError, KeyError, TypeError:
+            logger.warning("ignoring presence notification %r", payload)
+            return
+        # Our own announcement comes back too; nothing to refresh for it.
+        if backend != self.hub.instance and story in self.hub.local:
+            self._refresh.set()
+
     async def listen_forever(self) -> None:
         """Hold the ``LISTEN`` connection, reconnecting with backoff.
 
@@ -289,6 +337,9 @@ class PostgresBroker:
                     attempt = 0
                     logger.info("listening on channel %s", sql.CHANNEL)
                     async for notification in conn.notifies():
+                        if notification.channel == sql.PRESENCE_CHANNEL:
+                            self.handle_presence_notification(notification.payload)
+                            continue
                         try:
                             await self.handle_notification(notification.payload)
                         except Exception:
@@ -306,7 +357,12 @@ class PostgresBroker:
                 await asyncio.sleep(delay)
 
     async def report_presence(self) -> None:
-        """Report this backend's readers and push the totals to them."""
+        """Report this backend's readers and push the totals to them.
+
+        Each story whose local count changed since the last report is
+        announced on the presence channel, after the rows are written, so the
+        other backends push the new total to their readers at once.
+        """
         counts = self.hub.counts()
         for story, readers in counts.items():
             await self._execute(
@@ -317,6 +373,15 @@ class PostgresBroker:
         await self._execute(
             sql.FORGET_PRESENCE, {"backend": self.hub.instance, "stories": stories}
         )
+        changed = sorted(
+            story
+            for story in counts.keys() | self._reported.keys()
+            if counts.get(story) != self._reported.get(story)
+        )
+        for story in changed:
+            payload = json.dumps({"backend": self.hub.instance, "story": story})
+            await self._execute(sql.ANNOUNCE_PRESENCE, {"payload": payload})
+        self._reported = counts
         if not stories:
             return
         rows = await self._execute(
@@ -326,15 +391,43 @@ class PostgresBroker:
             self.hub.deliver(story, presence_message(story, readers))
 
     async def presence_forever(self) -> None:
-        """Report presence every ``presence_interval`` seconds."""
+        """Report presence when readers change, and at least periodically.
+
+        A change is a reader admitted or gone on this backend, or another
+        backend announcing a change in a story read here. Without changes, a
+        report still goes out every ``presence_interval`` seconds, which keeps
+        this backend's rows from expiring.
+        """
         while True:
+            # Cleared before the report: a change while it runs starts the
+            # next round right away.
+            self.hub.changed.clear()
+            self._refresh.clear()
             try:
                 await self.report_presence()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.warning("could not report presence: %s", exc)
-            await asyncio.sleep(self.presence_interval)
+            await self._wait_for_change()
+
+    async def _wait_for_change(self) -> None:
+        """Wait for a change, or for ``presence_interval`` seconds."""
+        waiters = [
+            asyncio.create_task(self.hub.changed.wait()),
+            asyncio.create_task(self._refresh.wait()),
+        ]
+        try:
+            done, _ = await asyncio.wait(
+                waiters,
+                timeout=self.presence_interval,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+        if done:
+            await asyncio.sleep(self.presence_debounce)
 
     async def prune_forever(self, interval: float = 600.0) -> None:
         """Delete old outbox rows and stale presence reports.
