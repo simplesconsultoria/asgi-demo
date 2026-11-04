@@ -166,6 +166,11 @@ stack-create-site:  ## Local Stack: Create a new site
 	@echo "(stack-start also does this, once, through the backend-init service.)"
 	VOLTO_VERSION=$(VOLTO_VERSION) PLONE_VERSION=$(PLONE_VERSION) docker compose -f docker-compose.yml run --build --rm backend-init
 
+.PHONY: stack-recreate-site
+stack-recreate-site:  ## Local Stack: Delete the site and create it again with the example content
+	@echo "Delete the site in the local Docker stack and create it again"
+	DELETE_EXISTING=true VOLTO_VERSION=$(VOLTO_VERSION) PLONE_VERSION=$(PLONE_VERSION) docker compose -f docker-compose.yml run --build --rm backend-init
+
 .PHONY: stack-start
 stack-start:  ## Local Stack: Start Services
 	@echo "Start local Docker stack"

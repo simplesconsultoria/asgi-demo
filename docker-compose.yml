@@ -77,7 +77,8 @@ services:
       - traefik.http.routers.rt-frontend.middlewares=gzip
 
   # One-shot: create the site with its example content, then switch its
-  # catalog to plone.pgcatalog. Does nothing on a site that already exists.
+  # catalog to plone.pgcatalog. Does nothing on a site that already exists,
+  # unless DELETE_EXISTING is true (make stack-recreate-site).
   backend-init:
     build:
       context: ./backend
@@ -86,6 +87,7 @@ services:
     image: asgi-demo-backend:latest
     environment:
       <<: *backend-environment
+      DELETE_EXISTING: "${DELETE_EXISTING:-false}"
     entrypoint: ["sh", "-c"]
     command:
       - >-
