@@ -17,6 +17,8 @@ PROJECT_NAME := $(shell echo '$(REPOSITORY_SETTINGS)' | jq -r '.name')
 STACK_NAME=asgi-demo-tangrama-com-br
 VOLTO_VERSION := $(shell echo '$(REPOSITORY_SETTINGS)' | jq -r '.frontend.volto_version')
 PLONE_VERSION := $(shell echo '$(REPOSITORY_SETTINGS)' | jq -r '.backend.base_package_version')
+# Seconds between updates in stack-post-updates
+INTERVAL ?= 20
 
 
 # We like colors
@@ -170,6 +172,10 @@ stack-create-site:  ## Local Stack: Create a new site
 stack-recreate-site:  ## Local Stack: Delete the site and create it again with the example content
 	@echo "Delete the site in the local Docker stack and create it again"
 	DELETE_EXISTING=true VOLTO_VERSION=$(VOLTO_VERSION) PLONE_VERSION=$(PLONE_VERSION) docker compose -f docker-compose.yml run --build --rm backend-init
+
+.PHONY: stack-post-updates
+stack-post-updates:  ## Local Stack: Post a live update to the example story every INTERVAL seconds (default 20)
+	uv run --script backend/scripts/post_updates.py --interval $(INTERVAL)
 
 .PHONY: stack-start
 stack-start:  ## Local Stack: Start Services
